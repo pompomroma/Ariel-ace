@@ -1,0 +1,8 @@
+# Replit run configuration — serves the static game so the Run button works
+# in a blank repl with no template. Python 3 ships in Replit's base image.
+run = "python3 -m http.server 8000"
+
+# Expose the static server to Replit's webview.
+[[ports]]
+localPort = 8000
+externalPort = 80
