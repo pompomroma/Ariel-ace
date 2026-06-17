@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<title>Ariel ACE — 3D RPG Prototype</title>
+<style>
+  :root { color-scheme: dark; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%; overflow: hidden; background: #0d0b14;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent;
+    touch-action: none; overscroll-behavior: none;
+  }
+  #app { position: fixed; inset: 0; }
+  canvas { display: block; width: 100%; height: 100%; }
+
+  /* ---- HUD ---- */
+  #hud { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
+
+  #hint {
+    position: absolute; top: env(safe-area-inset-top, 12px); left: 50%;
+    transform: translateX(-50%); margin-top: 10px;
+    padding: 8px 16px; border-radius: 999px;
+    background: rgba(12,10,20,0.55); backdrop-filter: blur(6px);
+    color: #e9e6f5; font-size: 13px; letter-spacing: .2px; white-space: nowrap;
+    border: 1px solid rgba(255,255,255,0.08);
+    transition: opacity .6s ease; opacity: 1;
+  }
+  #hint.fade { opacity: 0; }
+
+  #badge {
+    position: absolute; top: env(safe-area-inset-top, 12px); left: env(safe-area-inset-left, 12px);
+    margin: 12px; padding: 6px 12px; border-radius: 10px;
+    background: rgba(12,10,20,0.45); color: #cfc8ea; font-size: 12px;
+    border: 1px solid rgba(255,255,255,0.07); line-height: 1.5;
+  }
+  #badge b { color: #fff; }
+
+  /* Speed / state readout */
+  #stat {
+    position: absolute; bottom: env(safe-area-inset-bottom, 12px); right: env(safe-area-inset-right, 12px);
+    margin: 14px; padding: 6px 10px; border-radius: 8px;
+    background: rgba(12,10,20,0.4); color: #b9b2d6; font-size: 11px;
+    border: 1px solid rgba(255,255,255,0.06); font-variant-numeric: tabular-nums;
+  }
+
+  /* Joystick (mobile) — drawn as DOM */
+  #joy { position: absolute; inset: 0; pointer-events: none; }
+  .joy-base, .joy-knob { position: absolute; border-radius: 50%; pointer-events: none; opacity: 0; transition: opacity .12s ease; }
+  .joy-base {
+    width: 132px; height: 132px; margin: -66px 0 0 -66px;
+    background: radial-gradient(circle at 50% 50%, rgba(255,255,255,0.10), rgba(255,255,255,0.03) 70%);
+    border: 2px solid rgba(255,255,255,0.22);
+  }
+  .joy-knob {
+    width: 60px; height: 60px; margin: -30px 0 0 -30px;
+    background: radial-gradient(circle at 40% 35%, rgba(255,255,255,0.95), rgba(190,180,230,0.65));
+    border: 2px solid rgba(255,255,255,0.6); box-shadow: 0 4px 14px rgba(0,0,0,.4);
+  }
+  .joy-base.on, .joy-knob.on { opacity: 1; }
+
+  /* Overlay messages (errors / loading) */
+  #overlay {
+    position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(circle at 50% 35%, #1c1730, #0a0810 75%); color: #e9e6f5; text-align: center;
+    padding: 28px; transition: opacity .5s ease;
+  }
+  #overlay .card { max-width: 460px; }
+  #overlay h1 { font-size: 22px; margin-bottom: 10px; font-weight: 700; letter-spacing: .3px; }
+  #overlay p { font-size: 14px; line-height: 1.6; color: #b9b2d6; }
+  #overlay .spin {
+    width: 34px; height: 34px; margin: 0 auto 16px; border-radius: 50%;
+    border: 3px solid rgba(255,255,255,0.15); border-top-color: #b9a6ff; animation: spin 0.9s linear infinite;
+  }
+  #overlay.err .spin { display: none; }
+  #overlay.err h1 { color: #ff9a9a; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #overlay.hide { opacity: 0; pointer-events: none; }
+  code { background: rgba(255,255,255,.08); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+</style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <div id="hud">
+    <div id="badge"></div>
+    <div id="hint"></div>
+    <div id="stat"></div>
+    <div id="joy">
+      <div class="joy-base"></div>
+      <div class="joy-knob"></div>
+    </div>
+  </div>
+
+  <div id="overlay">
+    <div class="card">
+      <div class="spin"></div>
+      <h1>Loading…</h1>
+      <p>Starting the 3D engine.</p>
+    </div>
+  </div>
+
+  <!-- If the ES module fails to parse/run at all, show a clear message. -->
+  <script>
+    window.__bootOK = false;
+    window.addEventListener('error', function (e) {
+      if (window.__bootOK) return;
+      var o = document.getElementById('overlay');
+      if (!o) return;
+      o.className = 'err';
+      o.querySelector('h1').textContent = 'Could not start';
+      o.querySelector('p').innerHTML =
+        'A script error occurred before the game finished loading.<br><br>' +
+        'Most often this means the Three.js library could not be fetched from the CDN. ' +
+        'Make sure the Replit project has internet access, then reload.<br><br>' +
+        '<code>' + (e && e.message ? String(e.message).slice(0, 200) : 'unknown error') + '</code>';
+    });
+  </script>
+
+  <script type="module">
+    // ---------------------------------------------------------------------
+    // Boot / environment guards
+    // ---------------------------------------------------------------------
+    const overlay = document.getElementById('overlay');
+    const hintEl  = document.getElementById('hint');
+    const badgeEl = document.getElementById('badge');
+    const statEl  = document.getElementById('stat');
+
+    function fail(title, msg) {
+      overlay.className = 'err';
+      overlay.querySelector('h1').textContent = title;
+      overlay.querySelector('p').innerHTML = msg;
+    }
+
+    // WebGL feature detection.
+    (function () {
+      try {
+        const c = document.createElement('canvas');
+        const gl = c.getContext('webgl2') || c.getContext('webgl') || c.getContext('experimental-webgl');
+        if (!gl) throw new Error('no context');
+      } catch (e) {
+        fail('WebGL not available',
+          'This device or browser does not support WebGL, which is required for 3D rendering. ' +
+          'Try a modern browser (Chrome, Firefox, Safari, Edge) with hardware acceleration enabled.');
+        throw e;
+      }
+    })();
+
+    // ---------------------------------------------------------------------
+    // Load Three.js from a CDN, trying several mirrors so a single blocked
+    // host can't stop the game. (No importmap/build step required.)
+    // ---------------------------------------------------------------------
+    const THREE_CDNS = [
+      'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js',
+      'https://unpkg.com/three@0.160.0/build/three.module.js',
+      'https://esm.sh/three@0.160.0',
+      'https://cdn.skypack.dev/three@0.160.0',
+    ];
+    let THREE = null;
+    for (const url of THREE_CDNS) {
+      try { THREE = await import(/* @vite-ignore */ url); if (THREE && THREE.WebGLRenderer) break; }
+      catch (e) { console.warn('Three.js failed to load from', url, e); }
+    }
+    if (!THREE || !THREE.WebGLRenderer) {
+      fail('Could not load the 3D engine',
+        'The Three.js library could not be fetched from any CDN. This usually means the ' +
+        'Replit project (or your network) has no internet access. Enable internet access and reload.');
+      throw new Error('Three.js could not be loaded from any CDN');
+    }
+
+    const isTouch = (('ontouchstart' in window) || navigator.maxTouchPoints > 0);
+
+    // ---------------------------------------------------------------------
+    // Renderer / scene / camera
+    // ---------------------------------------------------------------------
+    const app = document.getElementById('app');
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    app.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    // Warm sunset fog for depth.
+    const FOG_COLOR = new THREE.Color(0xe8a06a);
+    scene.fog = new THREE.Fog(FOG_COLOR, 60, 320);
+
+    const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 1200);
+    camera.position.set(0, 6, 12);
+
+    // ---------------------------------------------------------------------
+    // Sky — large gradient dome (sunset)
+    // ---------------------------------------------------------------------
+    {
+      const skyGeo = new THREE.SphereGeometry(600, 32, 16);
+      const skyMat = new THREE.ShaderMaterial({
+        side: THREE.BackSide, depthWrite: false, fog: false,
+        uniforms: {
+          top:    { value: new THREE.Color(0x2a2350) },
+          mid:    { value: new THREE.Color(0xe88a4e) },
+          bottom: { value: new THREE.Color(0xf6c98a) },
+        },
+        vertexShader: `
+          varying vec3 vPos;
+          void main(){ vPos = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }
+        `,
+        fragmentShader: `
+          varying vec3 vPos;
+          uniform vec3 top; uniform vec3 mid; uniform vec3 bottom;
+          void main(){
+            float h = normalize(vPos).y;          // -1..1
+            float t = clamp(h, -1.0, 1.0);
+            vec3 col;
+            if (t > 0.18) col = mix(mid, top, smoothstep(0.18, 0.9, t));
+            else          col = mix(bottom, mid, smoothstep(-0.25, 0.18, t));
+            gl_FragColor = vec4(col, 1.0);
+          }
+        `,
+      });
+      scene.add(new THREE.Mesh(skyGeo, skyMat));
+    }
+
+    // ---------------------------------------------------------------------
+    // Lighting
+    // ---------------------------------------------------------------------
+    const hemi = new THREE.HemisphereLight(0xffe6c4, 0x55502f, 0.85);
+    scene.add(hemi);
+
+    const sun = new THREE.DirectionalLight(0xffd9a0, 1.5);
+    sun.position.set(-60, 70, -40);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.camera.near = 1;
+    sun.shadow.camera.far = 260;
+    sun.shadow.camera.left = -60; sun.shadow.camera.right = 60;
+    sun.shadow.camera.top = 60;   sun.shadow.camera.bottom = -60;
+    sun.shadow.bias = -0.0004;
+    scene.add(sun);
+    scene.add(sun.target);
+
+    const amb = new THREE.AmbientLight(0xffe9cf, 0.25);
+    scene.add(amb);
+
+    // ---------------------------------------------------------------------
+    // Ground — large grass plane with a subtle procedural tone variation
+    // ---------------------------------------------------------------------
+    {
+      const groundMat = new THREE.MeshStandardMaterial({ color: 0x6f8a3e, roughness: 1.0, metalness: 0.0 });
+      const ground = new THREE.Mesh(new THREE.PlaneGeometry(2000, 2000, 1, 1), groundMat);
+      ground.rotation.x = -Math.PI / 2;
+      ground.receiveShadow = true;
+      scene.add(ground);
+
+      // A faint grid of darker patches so motion is readable while running.
+      const patchMat = new THREE.MeshStandardMaterial({ color: 0x5f7a34, roughness: 1.0 });
+      const patchGeo = new THREE.PlaneGeometry(8, 8);
+      const patches = new THREE.InstancedMesh(patchGeo, patchMat, 400);
+      const m = new THREE.Matrix4();
+      let i = 0;
+      for (let gx = -10; gx < 10; gx++) {
+        for (let gz = -10; gz < 10; gz++) {
+          const x = gx * 18 + (Math.sin(gx * 12.9 + gz) * 6);
+          const z = gz * 18 + (Math.cos(gz * 7.3 + gx) * 6);
+          m.makeRotationX(-Math.PI / 2);
+          m.setPosition(x, 0.02, z);
+          patches.setMatrixAt(i++, m);
+        }
+      }
+      patches.receiveShadow = true;
+      scene.add(patches);
+    }
+
+    // ---------------------------------------------------------------------
+    // Distant buildings (parallax) — simple boxes near the horizon
+    // ---------------------------------------------------------------------
+    {
+      const mats = [0x8a7d74, 0x9b8f86, 0x77707c].map(c => new THREE.MeshStandardMaterial({ color: c, roughness: 0.9 }));
+      for (let k = 0; k < 26; k++) {
+        const ang = (k / 26) * Math.PI * 2;
+        const dist = 220 + Math.sin(k * 3.1) * 60;
+        const w = 14 + Math.random() * 26, h = 18 + Math.random() * 70, d = 14 + Math.random() * 26;
+        const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mats[k % mats.length]);
+        b.position.set(Math.cos(ang) * dist, h / 2, Math.sin(ang) * dist);
+        b.castShadow = false; b.receiveShadow = false;
+        scene.add(b);
+      }
+    }
+
+    // ---------------------------------------------------------------------
+    // Avatar — blocky R6-style humanoid (procedural)
+    //   All limb groups pivot at the shoulder/hip so they swing correctly.
+    // ---------------------------------------------------------------------
+    const SKIN  = 0xf2d2a9;
+    const SHIRT = 0xd9d3c7;   // light torso
+    const BAND  = 0x2b2b30;   // dark band across torso (matches video)
+    const PANTS = 0x33323a;   // dark legs
+    const CUFF  = 0x2b2b30;   // dark cuffs near hands
+
+    function mat(color, rough = 0.7) { return new THREE.MeshStandardMaterial({ color, roughness: rough, metalness: 0.0 }); }
+
+    // Unit: 1 ~= a Roblox "stud". Avatar ~ 5 studs tall.
+    const avatar = new THREE.Group();
+    scene.add(avatar);
+
+    // Inner group used for body bob/lean so it doesn't fight world position.
+    const body = new THREE.Group();
+    avatar.add(body);
+
+    // Torso (with a dark band built from a thin overlapping box).
+    const torso = new THREE.Group();
+    body.add(torso);
+    {
+      const tGeo = new THREE.BoxGeometry(2, 2, 1);
+      const t = new THREE.Mesh(tGeo, mat(SHIRT, 0.85));
+      t.castShadow = true; t.receiveShadow = true;
+      torso.add(t);
+      // Dark band
+      const band = new THREE.Mesh(new THREE.BoxGeometry(2.04, 0.7, 1.04), mat(BAND, 0.8));
+      band.position.y = -0.2; band.castShadow = true;
+      torso.add(band);
+      torso.position.y = 0; // torso center
+    }
+
+    // Head (slightly larger cube) + simple face.
+    const head = new THREE.Group();
+    body.add(head);
+    {
+      const h = new THREE.Mesh(new THREE.BoxGeometry(1.25, 1.25, 1.25), mat(SKIN, 0.6));
+      h.castShadow = true;
+      head.add(h);
+      // Eyes (two small dark boxes on +Z face)
+      const eyeMat = mat(0x222024, 0.4);
+      const eyeGeo = new THREE.BoxGeometry(0.16, 0.16, 0.05);
+      const eL = new THREE.Mesh(eyeGeo, eyeMat); eL.position.set(-0.28, 0.12, 0.64);
+      const eR = new THREE.Mesh(eyeGeo, eyeMat); eR.position.set( 0.28, 0.12, 0.64);
+      head.add(eL, eR);
+      // Mouth
+      const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.07, 0.05), eyeMat);
+      mouth.position.set(0, -0.2, 0.64); head.add(mouth);
+      head.position.y = 1.0 + 0.625; // sits on torso top (torso half=1)
+    }
+
+    // Helper to build a limb that pivots at its top.
+    function makeLimb(w, hgt, d, color, cuffColor) {
+      const g = new THREE.Group();              // pivot at top
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, hgt, d), mat(color, 0.8));
+      mesh.position.y = -hgt / 2;               // hang downward from pivot
+      mesh.castShadow = true; mesh.receiveShadow = true;
+      g.add(mesh);
+      if (cuffColor !== undefined) {
+        const cuff = new THREE.Mesh(new THREE.BoxGeometry(w + 0.04, 0.45, d + 0.04), mat(cuffColor, 0.8));
+        cuff.position.y = -hgt + 0.22; cuff.castShadow = true;
+        g.add(cuff);
+      }
+      return g;
+    }
+
+    const ARM_LEN = 2.0, LEG_LEN = 2.0;
+    // Arms
+    const armL = makeLimb(1, ARM_LEN, 1, SKIN, CUFF);
+    const armR = makeLimb(1, ARM_LEN, 1, SKIN, CUFF);
+    armL.position.set(-1.5, 1.0, 0); // shoulder (torso half width 1 + arm half 0.5)
+    armR.position.set( 1.5, 1.0, 0);
+    body.add(armL, armR);
+    // Legs
+    const legL = makeLimb(1, LEG_LEN, 1, PANTS);
+    const legR = makeLimb(1, LEG_LEN, 1, PANTS);
+    legL.position.set(-0.5, -1.0, 0); // hip (torso bottom)
+    legR.position.set( 0.5, -1.0, 0);
+    body.add(legL, legR);
+
+    // Lift whole avatar so feet rest on the ground (feet bottom at y=0).
+    // body origin is torso center; torso center sits at hip(-1) + ... feet bottom = -1 - LEG_LEN = -3
+    const GROUND_OFFSET = 3.0;
+    body.position.y = GROUND_OFFSET;
+
+    // ---------------------------------------------------------------------
+    // Dust / wind swirl effect — spiraling particles around the avatar
+    // ---------------------------------------------------------------------
+    const dust = (function () {
+      const COUNT = 140;
+      const geo = new THREE.BufferGeometry();
+      const pos = new Float32Array(COUNT * 3);
+      const seed = new Float32Array(COUNT);      // angular offset
+      const rad  = new Float32Array(COUNT);      // radius
+      const ypos = new Float32Array(COUNT);      // base height
+      const spd  = new Float32Array(COUNT);      // angular speed
+      for (let i = 0; i < COUNT; i++) {
+        seed[i] = Math.random() * Math.PI * 2;
+        rad[i]  = 1.4 + Math.random() * 2.6;
+        ypos[i] = Math.random() * 4.2;
+        spd[i]  = 2.2 + Math.random() * 2.8;
+      }
+      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      const tex = (function () {
+        const c = document.createElement('canvas'); c.width = c.height = 64;
+        const g = c.getContext('2d');
+        const grd = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+        grd.addColorStop(0, 'rgba(255,255,255,0.9)');
+        grd.addColorStop(0.4, 'rgba(255,250,240,0.35)');
+        grd.addColorStop(1, 'rgba(255,255,255,0)');
+        g.fillStyle = grd; g.fillRect(0, 0, 64, 64);
+        const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+      })();
+      const m = new THREE.PointsMaterial({
+        size: 0.9, map: tex, transparent: true, depthWrite: false,
+        blending: THREE.AdditiveBlending, opacity: 0.0, color: 0xfff3e0,
+      });
+      const points = new THREE.Points(geo, m);
+      points.frustumCulled = false;
+      avatar.add(points);
+
+      return {
+        points, COUNT, pos, seed, rad, ypos, spd, mat: m,
+        update(dt, t, intensity) {
+          for (let i = 0; i < COUNT; i++) {
+            const ang = seed[i] + t * spd[i];
+            const r = rad[i] * (0.6 + 0.4 * Math.sin(t * 1.7 + i));
+            pos[i * 3 + 0] = Math.cos(ang) * r;
+            pos[i * 3 + 1] = (ypos[i] + (t * 1.4 + i) % 4.2) % 4.2; // drift upward and wrap
+            pos[i * 3 + 2] = Math.sin(ang) * r - 1.0;               // bias slightly behind
+          }
+          geo.attributes.position.needsUpdate = true;
+          // ease opacity toward intensity
+          m.opacity += ((intensity * 0.8) - m.opacity) * Math.min(1, dt * 6);
+          m.size = 0.7 + intensity * 0.6;
+        }
+      };
+    })();
+
+    // ---------------------------------------------------------------------
+    // Camera rig — over-the-RIGHT-shoulder third person
+    // ---------------------------------------------------------------------
+    const cam = {
+      yaw: Math.PI,        // facing toward -Z initially (behind avatar looking forward)
+      pitch: 0.32,         // looking slightly down
+      dist: 9.5,
+      minPitch: -0.55,
+      maxPitch: 1.15,
+      shoulder: 1.6,       // right offset
+      height: 4.4,         // look-at height on avatar
+    };
+    const LOOK_SENS = 0.0028;   // mouse (pointer lock)
+    const TOUCH_SENS = 0.006;   // touch drag
+
+    // ---------------------------------------------------------------------
+    // Input state
+    // ---------------------------------------------------------------------
+    const keys = Object.create(null);
+    let sprint = false;
+
+    // Movement intent in camera-local space: x = strafe, y = forward
+    const moveInput = new THREE.Vector2(0, 0);
+
+    // --- Keyboard ---
+    window.addEventListener('keydown', (e) => {
+      const k = e.key.toLowerCase();
+      keys[k] = true;
+      if (k === 'shift') sprint = true;
+      if (['w', 'a', 's', 'd', ' '].includes(k)) e.preventDefault();
+    }, { passive: false });
+    window.addEventListener('keyup', (e) => {
+      const k = e.key.toLowerCase();
+      keys[k] = false;
+      if (k === 'shift') sprint = false;
+    });
+
+    // --- Pointer lock mouse look (PC) ---
+    const canvas = renderer.domElement;
+    let pointerLocked = false;
+    if (!isTouch) {
+      canvas.addEventListener('click', () => {
+        if (!pointerLocked && canvas.requestPointerLock) canvas.requestPointerLock();
+      });
+      document.addEventListener('pointerlockchange', () => {
+        pointerLocked = (document.pointerLockElement === canvas);
+        updateHint();
+      });
+      document.addEventListener('mousemove', (e) => {
+        if (!pointerLocked) return;
+        cam.yaw   -= e.movementX * LOOK_SENS;          // mouse right -> turn right
+        cam.pitch += e.movementY * LOOK_SENS;          // mouse up -> look up
+        cam.pitch = Math.max(cam.minPitch, Math.min(cam.maxPitch, cam.pitch));
+      });
+    }
+
+    // --- Touch controls (mobile): dynamic joystick (left) + look drag (right) ---
+    const joyBase = document.querySelector('.joy-base');
+    const joyKnob = document.querySelector('.joy-knob');
+    const JOY_MAX = 56;
+    let joyId = null, joyCx = 0, joyCy = 0;
+    let lookId = null, lookLastX = 0, lookLastY = 0;
+
+    function leftZone(x) { return x < window.innerWidth * 0.5; }
+
+    function onTouchStart(e) {
+      for (const t of e.changedTouches) {
+        if (leftZone(t.clientX) && joyId === null) {
+          joyId = t.identifier; joyCx = t.clientX; joyCy = t.clientY;
+          joyBase.style.left = joyCx + 'px'; joyBase.style.top = joyCy + 'px';
+          joyKnob.style.left = joyCx + 'px'; joyKnob.style.top = joyCy + 'px';
+          joyBase.classList.add('on'); joyKnob.classList.add('on');
+        } else if (lookId === null) {
+          lookId = t.identifier; lookLastX = t.clientX; lookLastY = t.clientY;
+        }
+      }
+      e.preventDefault();
+    }
+    function onTouchMove(e) {
+      for (const t of e.changedTouches) {
+        if (t.identifier === joyId) {
+          let dx = t.clientX - joyCx, dy = t.clientY - joyCy;
+          const len = Math.hypot(dx, dy) || 1;
+          const cl = Math.min(len, JOY_MAX);
+          const nx = dx / len, ny = dy / len;
+          joyKnob.style.left = (joyCx + nx * cl) + 'px';
+          joyKnob.style.top  = (joyCy + ny * cl) + 'px';
+          const mag = cl / JOY_MAX;
+          moveInput.x = nx * mag;        // strafe (screen-right)
+          moveInput.y = -ny * mag;       // forward (screen-up)
+        } else if (t.identifier === lookId) {
+          const dx = t.clientX - lookLastX, dy = t.clientY - lookLastY;
+          lookLastX = t.clientX; lookLastY = t.clientY;
+          cam.yaw   -= dx * TOUCH_SENS;                 // drag right -> turn right
+          cam.pitch += dy * TOUCH_SENS;                 // drag up -> look up
+          cam.pitch = Math.max(cam.minPitch, Math.min(cam.maxPitch, cam.pitch));
+        }
+      }
+      e.preventDefault();
+    }
+    function onTouchEnd(e) {
+      for (const t of e.changedTouches) {
+        if (t.identifier === joyId) {
+          joyId = null; moveInput.set(0, 0);
+          joyBase.classList.remove('on'); joyKnob.classList.remove('on');
+        } else if (t.identifier === lookId) {
+          lookId = null;
+        }
+      }
+      e.preventDefault();
+    }
+    if (isTouch) {
+      window.addEventListener('touchstart', onTouchStart, { passive: false });
+      window.addEventListener('touchmove',  onTouchMove,  { passive: false });
+      window.addEventListener('touchend',   onTouchEnd,   { passive: false });
+      window.addEventListener('touchcancel',onTouchEnd,   { passive: false });
+    }
+
+    // ---------------------------------------------------------------------
+    // HUD text
+    // ---------------------------------------------------------------------
+    function updateHint() {
+      if (isTouch) {
+        hintEl.textContent = 'Left: drag to move • Right: drag to look';
+      } else if (pointerLocked) {
+        hintEl.textContent = 'WASD to move • Mouse to look • Shift to sprint • Esc to release';
+      } else {
+        hintEl.textContent = 'Click to capture the mouse and look around';
+      }
+    }
+    badgeEl.innerHTML = '<b>Ariel ACE</b> — 3D RPG Prototype' +
+      (isTouch ? '<br>Mobile controls active' : '<br>PC controls active');
+    updateHint();
+    // Auto-fade hint after a while.
+    setTimeout(() => hintEl.classList.add('fade'), 7000);
+    function flashHint() { hintEl.classList.remove('fade'); clearTimeout(flashHint._t); flashHint._t = setTimeout(() => hintEl.classList.add('fade'), 5000); }
+
+    // ---------------------------------------------------------------------
+    // Player state
+    // ---------------------------------------------------------------------
+    const player = {
+      pos: new THREE.Vector3(0, 0, 0),
+      heading: Math.PI,            // facing -Z
+      speed: 0,                    // current planar speed (units/s)
+      runPhase: 0,                 // animation phase
+      bobT: 0,
+    };
+    const WALK_SPEED = 9.0;
+    const RUN_SPEED  = 16.0;
+    const ACCEL = 60.0, DECEL = 50.0;
+
+    // Scratch vectors
+    const _fwd = new THREE.Vector3();
+    const _right = new THREE.Vector3();
+    const _wish = new THREE.Vector3();
+    const _camPos = new THREE.Vector3();
+    const _lookAt = new THREE.Vector3();
+    const _tmp = new THREE.Vector3();
+
+    function shortAngleLerp(a, b, t) {
+      let d = ((b - a + Math.PI) % (Math.PI * 2)) - Math.PI;
+      if (d < -Math.PI) d += Math.PI * 2;
+      return a + d * t;
+    }
+
+    // ---------------------------------------------------------------------
+    // Main loop
+    // ---------------------------------------------------------------------
+    let last = performance.now();
+    let started = false;
+    const clock = { t: 0 };
+
+    function frame(now) {
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      clock.t += dt;
+
+      // ----- Gather movement input (camera-relative) -----
+      let ix = 0, iy = 0;
+      if (!isTouch) {
+        if (keys['w']) iy += 1;
+        if (keys['s']) iy -= 1;
+        if (keys['a']) ix -= 1;
+        if (keys['d']) ix += 1;
+        const l = Math.hypot(ix, iy);
+        if (l > 1) { ix /= l; iy /= l; }
+      } else {
+        ix = moveInput.x; iy = moveInput.y;
+      }
+      const inputMag = Math.min(1, Math.hypot(ix, iy));
+
+      // Camera forward/right on the ground plane (yaw only) — this is the
+      // coupling that lets the look controls "yank" the movement direction.
+      // forward = the direction the camera looks (horizontal); right = player's right.
+      _fwd.set(Math.sin(cam.yaw), 0, Math.cos(cam.yaw)).normalize();
+      _right.set(-_fwd.z, 0, _fwd.x); // right-hand: forward rotated +90° about Y
+
+      _wish.set(0, 0, 0);
+      _wish.addScaledVector(_fwd, iy);
+      _wish.addScaledVector(_right, ix);
+      const wishLen = _wish.length();
+      if (wishLen > 1e-4) _wish.multiplyScalar(1 / wishLen);
+
+      // ----- Speed (accelerate/decelerate) -----
+      const targetSpeed = inputMag * (sprint ? RUN_SPEED : WALK_SPEED);
+      if (targetSpeed > player.speed) player.speed = Math.min(targetSpeed, player.speed + ACCEL * dt);
+      else                            player.speed = Math.max(targetSpeed, player.speed - DECEL * dt);
+
+      // ----- Move + face movement direction -----
+      if (wishLen > 1e-4 && player.speed > 0.01) {
+        player.pos.addScaledVector(_wish, player.speed * dt);
+        const targetHeading = Math.atan2(_wish.x, _wish.z);
+        player.heading = shortAngleLerp(player.heading, targetHeading, Math.min(1, dt * 12));
+      }
+
+      // ----- Drive the avatar transform -----
+      avatar.position.set(player.pos.x, 0, player.pos.z);
+      avatar.rotation.y = player.heading;
+
+      // ----- Animation: run cycle vs idle (blended by run factor) -----
+      const runFactor = Math.min(1, player.speed / WALK_SPEED);  // 0..1+ (we clamp)
+      const cadence = 8.0 + runFactor * 3.0;                     // strides/sec scale
+      player.runPhase += dt * cadence * (0.3 + runFactor);
+
+      const swing = (Math.PI / 180) * (18 + runFactor * 42);     // 18°..60°
+      const ph = player.runPhase;
+
+      // Contralateral swing: left arm forward when right leg forward.
+      const sA = Math.sin(ph);
+      const sB = Math.sin(ph + Math.PI);
+      // Arms (rotate about X). Add a tiny constant bend forward + lean as run grows.
+      armL.rotation.x = sA * swing - 0.05 * runFactor;
+      armR.rotation.x = sB * swing - 0.05 * runFactor;
+      // slight outward splay + counter-twist for the "small details"
+      armL.rotation.z =  0.06 + Math.cos(ph) * 0.05 * runFactor;
+      armR.rotation.z = -0.06 - Math.cos(ph) * 0.05 * runFactor;
+
+      // Legs opposite the arms.
+      legL.rotation.x = sB * swing;
+      legR.rotation.x = sA * swing;
+      // knee-ish ease: bend the forward-swinging leg slightly via z-scale of bob (subtle)
+      // (kept simple/rigid like R6, with small forward kick on the lifted leg)
+      legL.rotation.x += Math.max(0, Math.cos(ph + Math.PI)) * 0.12 * runFactor;
+      legR.rotation.x += Math.max(0, Math.cos(ph)) * 0.12 * runFactor;
+
+      // Vertical bob at 2x stride frequency + lean forward while running.
+      const bob = Math.abs(Math.sin(ph)) * (0.10 + 0.16 * runFactor);
+      body.position.y = GROUND_OFFSET + bob - 0.02 * runFactor;
+      body.rotation.x = 0.16 * runFactor;          // forward lean
+      // gentle torso counter-rotation (shoulders rock) for liveliness
+      torso.rotation.y = Math.sin(ph) * 0.06 * runFactor;
+      head.rotation.y  = -Math.sin(ph) * 0.04 * runFactor;
+
+      // Idle breathing when essentially still.
+      if (runFactor < 0.02) {
+        const b = Math.sin(clock.t * 2.0) * 0.04;
+        body.position.y = GROUND_OFFSET + b;
+        body.rotation.x = 0;
+        armL.rotation.x = armR.rotation.x = b * 0.4;
+        torso.rotation.y = head.rotation.y = 0;
+      }
+
+      // ----- Dust swirl -----
+      dust.update(dt, clock.t, Math.min(1, runFactor));
+
+      // ----- Camera: over-the-right-shoulder, follow + look -----
+      // Anchor at avatar's upper body.
+      _lookAt.set(player.pos.x, cam.height, player.pos.z);
+      // Shift the whole rig to the player's RIGHT so we look over the right
+      // shoulder (avatar sits left-of-center). right = forward rotated +90° about Y.
+      const rightX = -Math.cos(cam.yaw), rightZ = Math.sin(cam.yaw);
+      _lookAt.x += rightX * cam.shoulder;
+      _lookAt.z += rightZ * cam.shoulder;
+
+      // Camera position: BEHIND the look direction (target - forward*horiz), raised by pitch.
+      const horiz = Math.cos(cam.pitch) * cam.dist;
+      const vert  = Math.sin(cam.pitch) * cam.dist;
+      _camPos.set(
+        _lookAt.x - Math.sin(cam.yaw) * horiz,
+        _lookAt.y + vert + 0.4,
+        _lookAt.z - Math.cos(cam.yaw) * horiz
+      );
+      // Smooth follow.
+      camera.position.lerp(_camPos, Math.min(1, dt * 9));
+      camera.lookAt(_lookAt);
+
+      // Keep sun shadow centered on the player.
+      sun.position.set(player.pos.x - 60, 70, player.pos.z - 40);
+      sun.target.position.set(player.pos.x, 0, player.pos.z);
+
+      // ----- HUD stat -----
+      statEl.textContent =
+        'speed ' + player.speed.toFixed(1) +
+        ' • ' + (player.speed > WALK_SPEED + 0.5 ? 'RUN' : player.speed > 0.2 ? 'move' : 'idle');
+
+      if ((inputMag > 0.01) && hintEl.classList.contains('fade')) { /* leave faded once moving */ }
+
+      renderer.render(scene, camera);
+
+      if (!started) { started = true; window.__bootOK = true; overlay.classList.add('hide'); }
+      requestAnimationFrame(frame);
+    }
+
+    // ---------------------------------------------------------------------
+    // Resize
+    // ---------------------------------------------------------------------
+    function onResize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    }
+    window.addEventListener('resize', onResize);
+    window.addEventListener('orientationchange', onResize);
+
+    requestAnimationFrame(frame);
+  </script>
+</body>
+</html>

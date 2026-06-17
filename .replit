@@ -1,0 +1,22 @@
+# Replit run configuration — serves the static game so the green Run button
+# works in a BLANK repl with no template.
+#
+# `modules` is what provisions a language runtime in a blank repl. Without it,
+# `python3` is not on PATH and the Run button fails with "command not found".
+modules = ["python-3.11"]
+
+# Entry file (used by the editor/webview).
+entrypoint = "index.html"
+
+# Serve the current folder as a static site on port 8000 (bind all interfaces
+# so Replit can reach it). `python3` is provided by the module above; the
+# fallback covers the rare case where only `python` is on PATH.
+run = "python3 -m http.server 8000 --bind 0.0.0.0 || python -m http.server 8000"
+
+[nix]
+channel = "stable-24_05"
+
+# Map the server port to the public webview.
+[[ports]]
+localPort = 8000
+externalPort = 80
