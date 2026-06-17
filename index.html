@@ -80,15 +80,6 @@
   #overlay.hide { opacity: 0; pointer-events: none; }
   code { background: rgba(255,255,255,.08); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
 </style>
-
-<!-- Three.js core, loaded from CDN via importmap (Replit has internet). -->
-<script type="importmap">
-{
-  "imports": {
-    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
-  }
-}
-</script>
 </head>
 <body>
   <div id="app"></div>
@@ -129,8 +120,6 @@
   </script>
 
   <script type="module">
-    import * as THREE from 'three';
-
     // ---------------------------------------------------------------------
     // Boot / environment guards
     // ---------------------------------------------------------------------
@@ -158,6 +147,28 @@
         throw e;
       }
     })();
+
+    // ---------------------------------------------------------------------
+    // Load Three.js from a CDN, trying several mirrors so a single blocked
+    // host can't stop the game. (No importmap/build step required.)
+    // ---------------------------------------------------------------------
+    const THREE_CDNS = [
+      'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js',
+      'https://unpkg.com/three@0.160.0/build/three.module.js',
+      'https://esm.sh/three@0.160.0',
+      'https://cdn.skypack.dev/three@0.160.0',
+    ];
+    let THREE = null;
+    for (const url of THREE_CDNS) {
+      try { THREE = await import(/* @vite-ignore */ url); if (THREE && THREE.WebGLRenderer) break; }
+      catch (e) { console.warn('Three.js failed to load from', url, e); }
+    }
+    if (!THREE || !THREE.WebGLRenderer) {
+      fail('Could not load the 3D engine',
+        'The Three.js library could not be fetched from any CDN. This usually means the ' +
+        'Replit project (or your network) has no internet access. Enable internet access and reload.');
+      throw new Error('Three.js could not be loaded from any CDN');
+    }
 
     const isTouch = (('ontouchstart' in window) || navigator.maxTouchPoints > 0);
 
